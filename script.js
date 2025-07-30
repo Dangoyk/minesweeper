@@ -1,10 +1,20 @@
-class EnhancedMinesweeper {
+class ParkMinesweeper {
     constructor() {
         this.boardSize = 10;
+        this.mineCount = 10;
         this.board = [];
-        this.tilesRevealed = 0;
+        this.gameState = 'playing'; // 'playing', 'won', 'lost'
+        this.firstClick = true;
+        this.flaggedCount = 0;
+        this.revealedCount = 0;
+        this.startTime = null;
+        this.timer = null;
+        
+        // DOM elements
         this.gameBoard = document.getElementById('game-board');
-        this.tilesRevealedDisplay = document.getElementById('tiles-revealed');
+        this.mineCountDisplay = document.getElementById('mine-count');
+        this.timerDisplay = document.getElementById('timer');
+        this.gameStatus = document.getElementById('game-status');
         this.resetButton = document.getElementById('reset-btn');
         
         this.initializeGame();
@@ -13,23 +23,38 @@ class EnhancedMinesweeper {
     
     initializeGame() {
         this.board = [];
-        this.tilesRevealed = 0;
-        this.updateTilesRevealedDisplay();
+        this.gameState = 'playing';
+        this.firstClick = true;
+        this.flaggedCount = 0;
+        this.revealedCount = 0;
+        this.startTime = null;
+        this.stopTimer();
+        
+        this.updateMineCountDisplay();
+        this.updateTimerDisplay(0);
+        this.updateGameStatus('');
         this.createBoard();
     }
     
     createBoard() {
         this.gameBoard.innerHTML = '';
         
+        // Initialize board data
         for (let row = 0; row < this.boardSize; row++) {
             this.board[row] = [];
             for (let col = 0; col < this.boardSize; col++) {
-                // Initialize each tile with state (unrevealed = 0, revealed states = 1-6)
                 this.board[row][col] = {
-                    revealed: false,
-                    colorState: 0
+                    isMine: false,
+                    isRevealed: false,
+                    isFlagged: false,
+                    neighborMines: 0
                 };
-                
+            }
+        }
+        
+        // Create DOM tiles
+        for (let row = 0; row < this.boardSize; row++) {
+            for (let col = 0; col < this.boardSize; col++) {
                 const tile = this.createTile(row, col);
                 this.gameBoard.appendChild(tile);
             }
@@ -42,84 +67,212 @@ class EnhancedMinesweeper {
         tile.dataset.row = row;
         tile.dataset.col = col;
         
-        tile.addEventListener('click', () => this.handleTileClick(row, col));
+        tile.addEventListener('click', (e) => {
+            e.preventDefault();
+            this.handleLeftClick(row, col);
+        });
+        
+        tile.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            this.handleRightClick(row, col);
+        });
         
         return tile;
     }
     
-    handleTileClick(row, col) {
-        const tile = this.gameBoard.children[row * this.boardSize + col];
-        const tileData = this.board[row][col];
+    placeMines(excludeRow, excludeCol) {
+        let minesPlaced = 0;
+        while (minesPlaced < this.mineCount) {
+            const row = Math.floor(Math.random() * this.boardSize);
+            const col = Math.floor(Math.random() * this.boardSize);
+            
+            if (!this.board[row][col].isMine && 
+                !(row === excludeRow && col === excludeCol)) {
+                this.board[row][col].isMine = true;
+                minesPlaced++;
+            }
+        }
         
-        // If tile is already revealed, cycle through color states
-        if (tileData.revealed) {
-            this.cycleTileColor(tile, tileData);
+        // Calculate neighbor mine counts
+        for (let row = 0; row < this.boardSize; row++) {
+            for (let col = 0; col < this.boardSize; col++) {
+                if (!this.board[row][col].isMine) {
+                    this.board[row][col].neighborMines = this.countNeighborMines(row, col);
+                }
+            }
+        }
+    }
+    
+    countNeighborMines(row, col) {
+        let count = 0;
+        for (let r = -1; r <= 1; r++) {
+            for (let c = -1; c <= 1; c++) {
+                const newRow = row + r;
+                const newCol = col + c;
+                if (this.isValidPosition(newRow, newCol) && 
+                    this.board[newRow][newCol].isMine) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+    
+    isValidPosition(row, col) {
+        return row >= 0 && row < this.boardSize && 
+               col >= 0 && col < this.boardSize;
+    }
+    
+    handleLeftClick(row, col) {
+        if (this.gameState !== 'playing') return;
+        
+        const cell = this.board[row][col];
+        if (cell.isRevealed || cell.isFlagged) return;
+        
+        if (this.firstClick) {
+            this.firstClick = false;
+            this.placeMines(row, col);
+            this.startTimer();
+        }
+        
+        this.revealCell(row, col);
+    }
+    
+    handleRightClick(row, col) {
+        if (this.gameState !== 'playing') return;
+        
+        const cell = this.board[row][col];
+        if (cell.isRevealed) return;
+        
+        this.toggleFlag(row, col);
+    }
+    
+    toggleFlag(row, col) {
+        const cell = this.board[row][col];
+        const tile = this.getTile(row, col);
+        
+        if (cell.isFlagged) {
+            cell.isFlagged = false;
+            this.flaggedCount--;
+            tile.classList.remove('flagged');
+            tile.textContent = '';
         } else {
-            // First click - reveal the tile
-            this.revealTile(tile, tileData);
+            cell.isFlagged = true;
+            this.flaggedCount++;
+            tile.classList.add('flagged');
+            tile.textContent = '🚩';
+        }
+        
+        this.updateMineCountDisplay();
+    }
+    
+    revealCell(row, col) {
+        const cell = this.board[row][col];
+        if (cell.isRevealed) return;
+        
+        cell.isRevealed = true;
+        this.revealedCount++;
+        const tile = this.getTile(row, col);
+        tile.classList.add('revealed');
+        
+        if (cell.isMine) {
+            tile.classList.add('mine');
+            tile.textContent = '💥';
+            this.gameOver(false);
+            return;
+        }
+        
+        if (cell.neighborMines > 0) {
+            tile.textContent = cell.neighborMines;
+            tile.classList.add(`number-${cell.neighborMines}`);
+        } else {
+            // Reveal adjacent cells automatically
+            this.revealAdjacentCells(row, col);
+        }
+        
+        this.checkWinCondition();
+    }
+    
+    revealAdjacentCells(row, col) {
+        for (let r = -1; r <= 1; r++) {
+            for (let c = -1; c <= 1; c++) {
+                const newRow = row + r;
+                const newCol = col + c;
+                if (this.isValidPosition(newRow, newCol)) {
+                    this.revealCell(newRow, newCol);
+                }
+            }
         }
     }
     
-    revealTile(tile, tileData) {
-        tileData.revealed = true;
-        tileData.colorState = 1; // Start with first color state
-        this.tilesRevealed++;
-        this.updateTilesRevealedDisplay();
-        
-        // Apply the revealed class
-        tile.classList.add('revealed-1');
-        
-        // Add a subtle sound effect simulation
-        this.playPopSound();
+    getTile(row, col) {
+        return this.gameBoard.children[row * this.boardSize + col];
     }
     
-    cycleTileColor(tile, tileData) {
-        // Remove current color class
-        tile.classList.remove(`revealed-${tileData.colorState}`);
-        
-        // Cycle to next color (1-6, then back to 1)
-        tileData.colorState = (tileData.colorState % 6) + 1;
-        
-        // Add new color class
-        tile.classList.add(`revealed-${tileData.colorState}`);
-        
-        // Trigger animation
-        tile.style.animation = 'none';
-        tile.offsetHeight; // Trigger reflow
-        tile.style.animation = 'pop 0.3s ease';
-        
-        this.playPopSound();
-    }
-    
-    playPopSound() {
-        // Create a simple audio feedback using Web Audio API
-        if (typeof AudioContext !== 'undefined' || typeof webkitAudioContext !== 'undefined') {
-            const audioContext = new (AudioContext || webkitAudioContext)();
-            const oscillator = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
-            
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-            
-            oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
-            oscillator.frequency.exponentialRampToValueAtTime(400, audioContext.currentTime + 0.1);
-            
-            gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
-            gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.1);
-            
-            oscillator.start(audioContext.currentTime);
-            oscillator.stop(audioContext.currentTime + 0.1);
+    checkWinCondition() {
+        const totalCells = this.boardSize * this.boardSize;
+        if (this.revealedCount === totalCells - this.mineCount) {
+            this.gameOver(true);
         }
     }
     
-    updateTilesRevealedDisplay() {
-        this.tilesRevealedDisplay.textContent = this.tilesRevealed;
+    gameOver(won) {
+        this.gameState = won ? 'won' : 'lost';
+        this.stopTimer();
+        
+        if (won) {
+            this.updateGameStatus('🎉 You found all the safe spots in the park! 🎉');
+            this.resetButton.textContent = '🎊 New Park';
+        } else {
+            this.updateGameStatus('💥 Oh no! You disturbed the wildlife! 💥');
+            this.resetButton.textContent = '🔄 Try Again';
+            this.revealAllMines();
+        }
+    }
+    
+    revealAllMines() {
+        for (let row = 0; row < this.boardSize; row++) {
+            for (let col = 0; col < this.boardSize; col++) {
+                const cell = this.board[row][col];
+                if (cell.isMine && !cell.isFlagged) {
+                    const tile = this.getTile(row, col);
+                    tile.classList.add('revealed', 'mine');
+                    tile.textContent = '💥';
+                }
+            }
+        }
+    }
+    
+    startTimer() {
+        this.startTime = Date.now();
+        this.timer = setInterval(() => {
+            const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
+            this.updateTimerDisplay(elapsed);
+        }, 1000);
+    }
+    
+    stopTimer() {
+        if (this.timer) {
+            clearInterval(this.timer);
+            this.timer = null;
+        }
+    }
+    
+    updateMineCountDisplay() {
+        this.mineCountDisplay.textContent = this.mineCount - this.flaggedCount;
+    }
+    
+    updateTimerDisplay(seconds) {
+        this.timerDisplay.textContent = seconds.toString().padStart(3, '0');
+    }
+    
+    updateGameStatus(message) {
+        this.gameStatus.textContent = message;
     }
     
     setupEventListeners() {
         this.resetButton.addEventListener('click', () => this.resetGame());
         
-        // Add keyboard support
         document.addEventListener('keydown', (e) => {
             if (e.key === 'r' || e.key === 'R') {
                 this.resetGame();
@@ -128,9 +281,9 @@ class EnhancedMinesweeper {
     }
     
     resetGame() {
-        // Add a nice transition effect
         this.gameBoard.style.opacity = '0.5';
         this.gameBoard.style.transform = 'scale(0.95)';
+        this.resetButton.textContent = '🌱 New Park';
         
         setTimeout(() => {
             this.initializeGame();
@@ -142,12 +295,11 @@ class EnhancedMinesweeper {
 
 // Initialize the game when the page loads
 document.addEventListener('DOMContentLoaded', () => {
-    new EnhancedMinesweeper();
+    new ParkMinesweeper();
 });
 
-// Add some nice visual effects
+// Add floating particles effect for ambiance
 document.addEventListener('DOMContentLoaded', () => {
-    // Add floating particles effect
     createFloatingParticles();
 });
 
@@ -162,17 +314,18 @@ function createFloatingParticles() {
     particleContainer.style.zIndex = '-1';
     document.body.appendChild(particleContainer);
     
-    for (let i = 0; i < 20; i++) {
+    // Create leaves and petals floating
+    const particles = ['🍃', '🌸', '🌺', '🦋', '🌼'];
+    
+    for (let i = 0; i < 15; i++) {
         const particle = document.createElement('div');
         particle.style.position = 'absolute';
-        particle.style.width = '4px';
-        particle.style.height = '4px';
-        particle.style.backgroundColor = 'rgba(255, 255, 255, 0.3)';
-        particle.style.borderRadius = '50%';
+        particle.style.fontSize = '20px';
         particle.style.left = Math.random() * 100 + '%';
         particle.style.top = Math.random() * 100 + '%';
-        particle.style.animation = `float ${3 + Math.random() * 4}s infinite ease-in-out`;
-        particle.style.animationDelay = Math.random() * 2 + 's';
+        particle.style.animation = `float ${5 + Math.random() * 5}s infinite ease-in-out`;
+        particle.style.animationDelay = Math.random() * 3 + 's';
+        particle.textContent = particles[Math.floor(Math.random() * particles.length)];
         particleContainer.appendChild(particle);
     }
     
@@ -180,8 +333,8 @@ function createFloatingParticles() {
     const style = document.createElement('style');
     style.textContent = `
         @keyframes float {
-            0%, 100% { transform: translateY(0px) rotate(0deg); }
-            50% { transform: translateY(-20px) rotate(180deg); }
+            0%, 100% { transform: translateY(0px) rotate(0deg); opacity: 0.7; }
+            50% { transform: translateY(-30px) rotate(180deg); opacity: 1; }
         }
     `;
     document.head.appendChild(style);
